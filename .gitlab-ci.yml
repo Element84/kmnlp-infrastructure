@@ -1,0 +1,34 @@
+image: python:3.12-slim
+
+before_script:
+  # Runs the script and only prints the output if it fails.
+  - |
+    if ! output=$(scripts/gitlab_before_script.sh 2>&1); then
+      echo "Script failed with output:"
+      echo "$output"
+      exit 1
+    fi
+
+stages:
+  - lint
+  - deploy
+
+lint:
+  stage: lint
+  script:
+    - source .venv/bin/activate
+    - scripts/lint.sh
+
+deploy:
+  stage: deploy
+  script:
+    - source .venv/bin/activate
+    - cp .env.template .env
+    - CREDS=$(aws sts assume-role --role-arn $DEPLOY_ROLE_ARN --role-session-name "git-lab-pipeline-deploy")
+    - export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
+    - export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')
+    - export AWS_SESSION_TOKEN=$(echo $CREDS | jq -r '.Credentials.SessionToken')
+    - scripts/deploy.sh --auto-approve
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH # run if commit on main branch
+    - if: $CI_PIPELINE_SOURCE == "pipeline" #  or run if triggered by another pipeline
