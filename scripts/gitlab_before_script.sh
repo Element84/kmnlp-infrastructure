@@ -34,4 +34,4 @@ unzip awscliv2.zip
 pip install uv
 
 # Create the venv and install dependencies.
-scripts/recreate_venv.sh
+uv sync --all-extras

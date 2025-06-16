@@ -35,6 +35,7 @@ from constructs import Construct
 
 from kmnlp_infra.common import (
     CLAUDE_3_5_SONNET,
+    CLAUDE_3_7_SONNET,
     CLAUDE_3_HAIKU,
     DASK_ADDRESS,
     REGION,
@@ -92,10 +93,10 @@ class Alb(Construct):
             self, "certificate", domain=domain, most_recent=True, types=["AMAZON_ISSUED"]
         )
 
-
-        boto3_client: SSMClient = boto3.client("ssm", region_name=REGION) # type: ignore[reportUnknownMemberType]
-        allowed_cidrs_param_value: str = \
-                boto3_client.get_parameter(Name="e84-kmnlp-demo-chainlit-allowed-cidrs-dict")["Parameter"]["Value"]
+        boto3_client: SSMClient = boto3.client("ssm", region_name=REGION)  # type: ignore[reportUnknownMemberType]
+        allowed_cidrs_param_value: str = boto3_client.get_parameter(
+            Name="e84-kmnlp-demo-chainlit-allowed-cidrs-dict"
+        )["Parameter"]["Value"]
         parsed_value: dict[str, str] = yaml.safe_load(allowed_cidrs_param_value)
 
         self.lb_sg = SecurityGroup(
@@ -143,6 +144,7 @@ class Alb(Construct):
                 )
             ],
         )
+
 
 class DemoKmnlpChainlitEcsService(Construct):
     """Create the Demo Chainlit ECS Service, running using Fargate.
@@ -211,8 +213,12 @@ class DemoKmnlpChainlitEcsService(Construct):
             assume_role_policy=create_assume_role_policy_for_aws_service("ecs-tasks"),
             inline_policy=[
                 IamRoleInlinePolicy(
-                    name="UseBedrockSonnet",
+                    name="UseBedrockSonnet35",
                     policy=create_policy(create_invoke_model_statement(CLAUDE_3_5_SONNET)),
+                ),
+                IamRoleInlinePolicy(
+                    name="UseBedrockSonnet37",
+                    policy=create_policy(create_invoke_model_statement(CLAUDE_3_7_SONNET)),
                 ),
                 IamRoleInlinePolicy(
                     name="UseBedrockHaiku",  # Needed for natural language to polygon calls

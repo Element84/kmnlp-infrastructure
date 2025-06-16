@@ -23,7 +23,7 @@ deploy:
   stage: deploy
   script:
     - source .venv/bin/activate
-    - cp .env.template .env
+    - touch .env # Create an empty .env file (so that common.sh doesn't complain)
     - CREDS=$(aws sts assume-role --role-arn $DEPLOY_ROLE_ARN --role-session-name "git-lab-pipeline-deploy")
     - export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
     - export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')

@@ -35,6 +35,7 @@ def get_env_var(name: str, default: str | None = None) -> str:
     return value
 
 
+CLAUDE_3_7_SONNET = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 CLAUDE_3_5_SONNET = "anthropic.claude-3-5-sonnet-20240620-v1:0"
 CLAUDE_3_HAIKU = "anthropic.claude-3-haiku-20240307-v1:0"
 
@@ -47,9 +48,9 @@ DEPLOY_BUCKET = get_env_var("DEPLOY_BUCKET")
 
 DASK_ADDRESS = get_env_var("DASK_ADDRESS")
 
-EXPECTED_VPC_NAME = "aws-controltower-VPC"
+CI_JOB_ROLE_ARN = get_env_var("CI_JOB_ROLE_ARN")
 
-CI_ROLE_ARN= get_env_var("CI_ROLE_ARN")
+EXPECTED_VPC_NAME = "aws-controltower-VPC"
 
 
 class Network(Construct):
@@ -189,7 +190,10 @@ def create_invoke_model_statement(model: str) -> dict[str, Any]:
     return {
         "Action": "bedrock:InvokeModel",
         "Effect": "Allow",
-        "Resource": f"arn:aws:bedrock:{REGION}::foundation-model/{model}",
+        "Resource": [
+            f"arn:aws:bedrock:*::foundation-model/{model}",
+            f"arn:aws:bedrock:{REGION}:*:inference-profile/us.{model}",
+        ],
     }
 
 

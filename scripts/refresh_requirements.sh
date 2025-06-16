@@ -1,19 +1,11 @@
 #!/bin/bash
 
-####################################################################################################
-# Pulls downs the latest requirements as defined in the pyproject.toml and requirements.in files.
-####################################################################################################
+######################################################################
+# Pulls downs the latest requirements as defined in the pyproject.toml
+######################################################################
 
 set -e -o pipefail
 
-rm -rf .venv
-
-uv pip compile \
-  --refresh \
-  --all-extras \
-  pyproject.toml \
-  -o requirements.txt
-
-uv venv
-
-uv pip sync requirements.txt
+uv lock --upgrade
+uv export --no-hashes --all-extras --format requirements-txt > requirements.txt
+uv sync --all-extras

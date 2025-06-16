@@ -48,20 +48,19 @@ Scaling up
 
 1. Install cdktf and terraform
    1. `brew install cdktf terraform` on the mac
-2. Checkout the code.
-3. Create/activate your Python environment of choice.
-4. Install uv: `pip install uv`.
-5. Install dependencies: `uv pip install -r pyproject.toml`.
-6. Install dev dependencies: `uv pip install -r pyproject.toml --extra dev`.
-7. Run `pre-commit install` to install pre-commit hooks.
-8. Configure your editor for realtime linting:
+1. Checkout the code.
+1. Create/activate your Python environment of choice (skip if only using uv).
+1. Install uv: `pip install uv` (skip if only using uv).
+1. Install dependencies: `uv sync --all-extras`.
+1. Run `pre-commit install` to install pre-commit hooks.
+1. Configure your editor for realtime linting:
 	- For VS Code:
 		- Set the correct Python environment for the workspace via `ctrl+shift+P` > `Python: Select Interpreter`.
 		- Install the Pylance and Ruff extensions.
-9.  Make changes.
-10. Verify linting passes `scripts/lint.sh`.
-11. Verify tests pass `scripts/test.sh`.
-12. Commit and push your changes.
+1.  Make changes.
+1. Verify linting passes `scripts/lint.sh`.
+1. Verify tests pass `scripts/test.sh`.
+1. Commit and push your changes.
 
 
 ## Manual Deploy

@@ -6,8 +6,5 @@
 
 set -e -o pipefail
 
-rm -rf .venv
-
-uv venv
-
-uv pip install -r requirements.txt
+rm -r .venv
+uv sync --all-extras
