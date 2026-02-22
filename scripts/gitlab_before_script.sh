@@ -7,11 +7,16 @@
 set -e -o pipefail
 
 # Install requirements needed to install GPG key
-apt-get update && apt-get install -y gnupg software-properties-common wget
+apt-get update && apt-get install -y gnupg software-properties-common wget curl
 
 # Install Hashicorp GPG key
 wget -O - https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+
+# If the folder `/etc/apt/keyrings` does not exist, it should be created before the curl command, read the note below.
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/usr/share/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+
 
 # Install necessary dependencies.
 apt-get update && \
@@ -21,7 +26,9 @@ apt-get update && \
   shellcheck \
   jq \
   npm \
-  terraform
+  terraform \
+  kubectl
+
 
 npm install --global cdktf-cli@latest terraform@latest
 

@@ -1,3 +1,7 @@
+# Project
+imports/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -167,3 +171,5 @@ cython_debug/
 # outputs from run_eval.py
 evals/outputs/
 cdktf.out/
+
+temp/

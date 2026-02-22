@@ -7,10 +7,16 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
-  "cdktf~=0.20.11",
-  "cdktf-cdktf-provider-aws==19.49.0",
+  "cdktf>=0.21.0, <1.0",
+  "cdktf-cdktf-provider-aws>=21.6.0",
   "boto3",
-  "boto3-stubs[ssm]",
+  "boto3-stubs[ec2,ssm]",
+  "cdktf-cdktf-provider-helm>=12.0.1",
+  "cdktf-cdktf-provider-kubernetes>=12.1.0",
+  "cdktf-cdktf-provider-null>=11.0.0",
+  "cdktf-cdktf-provider-random",
+  "yq>=3.4.3",
+  "pydantic>=2.12.1",
 ]
 dynamic = ["version"]
 
@@ -25,18 +31,20 @@ Gitlab = "https://repo.element84.com/noaa_km_nlp/kmnlp-infrastructure"
 dev = [
   "pytest>=8.3.3",
   "ruff>=0.6.8",
-  "pyright>=1.1.381",
+  "pyright[nodejs]>=1.1.381",
   "build>=1.2.2",
   "pre-commit>=3.8.0",
   "pre-commit-hooks>=4.6.0",
   "ipython>=8.28.0",
+  "ipykernel"
 ]
 
 [tool.setuptools.packages.find]
 exclude = ["vendored"]
 
 [tool.pyright]
-ignore = ["**/tests/**", "**/venv/**", "*.pyc"]
+ignore = ["**/.venv/**"]
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "**/tests/**", "**/.venv/**", "*.pyc", "imports"]
 typeCheckingMode = "strict"
 reportImplicitStringConcatenation = "none"
 reportPropertyTypeMismatch = "error"
@@ -78,8 +86,18 @@ ignore = [
   'A002',
   # allow long exception messages
   'TRY003',
+  # Allow string literals in exceptions.
+  'EM101',
   # Allow fstrings in exception messages
   'EM102',
+  # TO-DO formatting
+  'TD002',
+  'TD003',
+  'TD004',
+  # Allow TO-DOs not be to be an error to break build. We should be able to commit them in features branches
+  'FIX002',
+  # Too many arguments to function, Terraform CDK classes need lots of arguments.
+  'PLR0913'
 ]
 
 [tool.ruff.lint.per-file-ignores]

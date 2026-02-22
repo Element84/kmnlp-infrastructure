@@ -6,5 +6,5 @@
 
 set -e -o pipefail
 
-rm -r .venv
+rm -r .venv || true
 uv sync --all-extras

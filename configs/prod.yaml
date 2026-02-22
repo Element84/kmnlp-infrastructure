@@ -1,0 +1,56 @@
+terraform:
+  state_bucket: kmnlp-e84-terraform
+  deploy_bucket: kmnlp-e84-deploy
+  lock_table: kmnlp-tf-lock
+
+aws_account:
+  account_id: !env AWS_ACCOUNT_ID
+  region: us-east-1
+  ci_job_role_arn: !env CI_JOB_ROLE_ARN
+  developers_role_arn: !env DEVELOPERS_ROLE_ARN
+
+artifacts_bucket: e84-kmnlp-build-artifacts
+data_bucket: data-c6c22a2e42294c11b52ee7f0c792c071
+test_geotiff_bucket: test-geotiff-bucket
+
+langfuse:
+  web:
+    domain: langfuse.kmnlp.element84.com
+    num_instances: 1
+    num_cpus: 1
+    memory_gb: 2
+    image:
+      namespace: kmnlp
+      repository: langfuse
+      most_recent: true
+  worker:
+    num_instances: 1
+    num_cpus: 1
+    memory_gb: 2
+    image:
+      namespace: kmnlp
+      repository: langfuse-worker
+      most_recent: true
+
+chainlit:
+  domain: demo.kmnlp.element84.com
+  image: !from image_versions/chainlit.yaml
+  num_instances: 1
+  num_cpus: 8
+  memory_gb: 32
+
+api:
+  domain: api.kmnlp.element84.com
+  image: !from image_versions/api.yaml
+  num_instances: 1
+  num_cpus: 2
+  memory_gb: 8
+
+frontend:
+  domain: kmnlp.element84.com
+  website_bucket: kmnlp-e84-frontend
+  artifact: !from artifact_versions/frontend.yaml
+
+dask_cluster:
+  min_workers: 2
+  max_workers: 20

@@ -62,18 +62,74 @@ Scaling up
 1. Verify tests pass `scripts/test.sh`.
 1. Commit and push your changes.
 
+## Stacks
+
+The full infrastructure is deployed in 4 stacks:
+1. `bootstrap`
+1. `eks_cluster`
+1. `dask_cluster`
+1. `kmnlp_infra`
+
+In the most common workflow, only `dask_cluster` and `kmnlp_infra` need to be deployed.
+
+### `bootstrap`
+
+#### Intent
+
+Create the things that need to be present for CI deploy to work.
+
+#### Content
+
+The deploy role the CI job will assume.
+
+### `eks_cluster`
+
+#### Intent
+
+Create the EKS Cluster where Kubernetes work (i.e. the Dask Cluster) will be scheduled. (Unfortunately, the word "cluster" is overloaded.)
+
+#### Content
+
+* EKS Cluster
+* Roles to manage it
+* AWS Controller to create ELB for exposed scheduler service (created in Dask Cluster)
+* Dask Operator to manage creating all resources needed for Dask Cluster and Dask Autoscaler
+* Node pool to schedule system tasks
+* Fargate profile to schedule Dask workers and scheduler
+
+### `dask_cluster`
+
+#### Intent
+
+Create the Dask Cluster running inside the EKS Cluster
+
+#### Content
+
+* Dask Cluster
+* Dask Autoscaler to autoscale the Dask Cluster (currently not very useful)
+
+### `kmnlp_infra`
+
+#### Intent
+
+The demo app.
+
+#### Content
+
+* ECS Service to run the app, referencing the Dask Cluster's scheduler service
+* Load balancer to expose the app
 
 ## Manual Deploy
 
 Assumes you've done the developer setup
 
 1. Copy `.env.template` to `.env` and modify as needed
-    - At the very least, you will likely need to un-comment the `AWS_PROFILE` value.
-1. Connect as necessary to AWS to get credentials or login with your profile.
-1. Start the dask cluster in AWS from the `demo-app` project. (Instructions in that project's README.) NOTE: Do not hit enter when it finishes. It'll tear down the cluster.
-1. Once the clsuter starts, copy the tcp address of the scheduler, and paste as the value of `DASK_ADDRESS` in your `.env` file.
-1. Run `scripts/deploy.sh`
-1. Check to see whether the service is up at https://demo.kmnlp.element84.com/
+2. Connect as necessary to AWS to get credentials or login with your profile.
+3. Run `scripts/deploy.sh bootstrap`
+4. Run `scripts/deploy.sh eks_cluster`
+5. Run `scripts/deploy.sh dask_cluster`
+6. Run `scripts/deploy.sh kmnlp_infra`
+7. Check to see whether the service is up at https://demo.kmnlp.element84.com/
     * If the page doesn't resolve, either your IP address isn't in the allow list, or the deploy created the load balancer (rather than updating an existing one).
 
 

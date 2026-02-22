@@ -1,13 +1,4 @@
-image: python:3.12-slim
-
-before_script:
-  # Runs the script and only prints the output if it fails.
-  - |
-    if ! output=$(scripts/gitlab_before_script.sh 2>&1); then
-      echo "Script failed with output:"
-      echo "$output"
-      exit 1
-    fi
+image: quay.io/element84/e84-build-python:3.12-main
 
 stages:
   - lint
@@ -16,14 +7,18 @@ stages:
 lint:
   stage: lint
   script:
+    - pip3.12 install uv
+    - uv sync --all-extras
     - source .venv/bin/activate
     - scripts/lint.sh
 
 deploy:
   stage: deploy
+  image: python:3.12-slim-bookworm
+  before_script: scripts/gitlab_before_script.sh
   script:
+    - uv sync --all-extras
     - source .venv/bin/activate
-    - touch .env # Create an empty .env file (so that common.sh doesn't complain)
     - CREDS=$(aws sts assume-role --role-arn $DEPLOY_ROLE_ARN --role-session-name "git-lab-pipeline-deploy")
     - export AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
     - export AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')

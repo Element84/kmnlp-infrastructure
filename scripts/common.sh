@@ -6,27 +6,19 @@
 #
 # This file is meant to be `source`d by a script rather than run directly.
 #
-# Executing this script will set:
-#   * Environment variables based on the `.env` file,
-#   * SCRIPT_DIR and PROJ_DIR
-#   * ACCOUNT_ID based `aws sts get-caller-identity`
-#
-# It will also provide a function to create an S3 bucket.
-#
 ####################################################################################################
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-export PROJ_DIR="$SCRIPT_DIR/.."
+_PROJ_DIR="$( cd -P "$( dirname "$SCRIPT_DIR" )" && pwd )"
+export PROJ_DIR=$_PROJ_DIR
 
 
-set -a
-source "$PROJ_DIR/.env"
-set +a
-
-
-export ACCOUNT_ID
-ACCOUNT_ID=$(aws sts get-caller-identity | jq -r '.Account')
+if [[ -f "$PROJ_DIR/.env" ]]; then
+  set -a
+  source "$PROJ_DIR/.env"
+  set +a
+fi
 
 function create_bucket_if_not_exist() {
   bucket=$1
