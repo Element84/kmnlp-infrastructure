@@ -41,10 +41,10 @@ class Opensearch(Construct):
         id: str,
         config: Config,
         network: Network,
-        *,
-        num_instances: int = 2,
     ) -> None:
         super().__init__(scope, id)
+
+        opensearch_config = config.opensearch
 
         self.security_group = SecurityGroup(
             self,
@@ -91,7 +91,7 @@ class Opensearch(Construct):
 
         domain_name = "kmnlp-nlg"
 
-        subnets = network.private_subnets[0:num_instances]
+        subnets = network.private_subnets[0 : opensearch_config.num_instances]
         num_azs = len({s.availability_zone for s in subnets})
 
         self.opensearch_domain = OpensearchDomain(
@@ -99,11 +99,11 @@ class Opensearch(Construct):
             "opensearch_domain",
             depends_on=[self.log_resource_policy],
             domain_name=domain_name,
-            engine_version="OpenSearch_2.19",
+            engine_version=opensearch_config.engine_version,
             cluster_config=OpensearchDomainClusterConfig(
                 dedicated_master_enabled=False,
-                instance_type="r7g.large.search",
-                instance_count=num_instances,
+                instance_type=opensearch_config.instance_type,
+                instance_count=opensearch_config.num_instances,
                 zone_awareness_enabled=True,
                 zone_awareness_config=OpensearchDomainClusterConfigZoneAwarenessConfig(
                     availability_zone_count=num_azs
@@ -141,9 +141,9 @@ class Opensearch(Construct):
             ebs_options=OpensearchDomainEbsOptions(
                 ebs_enabled=True,
                 volume_type="gp3",
-                volume_size=100,
-                iops=3000,
-                throughput=125,
+                volume_size=opensearch_config.volume_size_gb,
+                iops=opensearch_config.iops,
+                throughput=opensearch_config.throughput,
             ),
             ip_address_type="ipv4",
             log_publishing_options=[

@@ -17,6 +17,7 @@ dependencies = [
   "cdktf-cdktf-provider-random",
   "yq>=3.4.3",
   "pydantic>=2.12.1",
+  "diagrams>=0.25.1",
 ]
 dynamic = ["version"]
 
@@ -60,6 +61,7 @@ reportIncompatibleVariableOverride = "none"
 
 [tool.ruff]
 line-length = 100
+extend-exclude = [".history/"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

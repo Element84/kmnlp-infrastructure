@@ -11,7 +11,7 @@ aws_account:
 
 artifacts_bucket: e84-kmnlp-build-artifacts
 data_bucket: data-c6c22a2e42294c11b52ee7f0c792c071
-test_geotiff_bucket: test-geotiff-bucket
+user_data_bucket: kmnlp-api-user-data
 
 langfuse:
   web:
@@ -31,13 +31,14 @@ langfuse:
       namespace: kmnlp
       repository: langfuse-worker
       most_recent: true
+  clickhouse:
+    num_cpus: 2
+    memory_gb: 16
+  redis_node_type: cache.t4g.micro
 
-chainlit:
-  domain: demo.kmnlp.element84.com
-  image: !from image_versions/chainlit.yaml
-  num_instances: 1
-  num_cpus: 8
-  memory_gb: 32
+lite_llm:
+  proxy_url: "https://litellm.kmnlp.element84.com/bedrock"
+
 
 api:
   domain: api.kmnlp.element84.com
@@ -45,6 +46,12 @@ api:
   num_instances: 1
   num_cpus: 2
   memory_gb: 8
+  env_vars:
+    dask_compute_size_limit_gb: 5
+    dask_progress_poll_interval_sec: 5
+    orchestration_agent_max_consecutive_responses: 100
+    orchestration_agent_max_tokens: 10000
+    algorithm_agent_max_tokens: 40000
 
 frontend:
   domain: kmnlp.element84.com
@@ -54,3 +61,45 @@ frontend:
 dask_cluster:
   min_workers: 2
   max_workers: 20
+  worker:
+    cpu_request: 4
+    cpu_limit: 4
+    memory_request_gb: 8
+    memory_limit_gb: 8
+  scheduler:
+    cpu_request: 1
+    cpu_limit: 1
+    memory_request_gb: 2
+    memory_limit_gb: 2
+
+opensearch:
+  instance_type: r7g.large.search
+  num_instances: 2
+  engine_version: OpenSearch_2.19
+  volume_size_gb: 100
+  iops: 3000
+  throughput: 125
+
+eks_node_group:
+  instance_types:
+    - t3.medium
+  desired_size: 2
+  min_size: 1
+  max_size: 4
+  disk_size_gb: 20
+
+database:
+  instance_class: db.t3.medium
+
+ingest_ubl:
+  num_cpus: 4
+  memory_gb: 30
+  log_level: DEBUG
+  image: !from image_versions/ingest_ubl.yaml
+
+knowledge_graph_ubl:
+  num_cpus: 2
+  memory_gb: 4
+  log_level: INFO
+  output_bucket: data-c6c22a2e42294c11b52ee7f0c792c071
+  output_prefix: knowledge-graphs/

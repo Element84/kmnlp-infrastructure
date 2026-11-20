@@ -120,6 +120,7 @@ class PublicAlb(Construct):
             security_groups=[self.lb_sg.id],
             subnets=network.public_subnet_ids,
             idle_timeout=300,
+            access_logs=self.lb_access_logs,
         )
 
         self.lb_target_group = LbTargetGroup(

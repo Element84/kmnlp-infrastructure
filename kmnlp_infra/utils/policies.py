@@ -133,15 +133,9 @@ def create_read_s3_bucket_statement(bucket_name: str) -> IAMStatement:
 
 
 def create_read_all_buckets_statement() -> IAMStatement:
-    """Return policy for getting all objects in an S3 bucket.
-
-    Args: bucket_name (str): The bucket name that will be accessed
-
-    Returns:
-        The JSON representation of an access policy to read all objects in the bucket
-    """
+    """Return policy for getting all objects in all S3 buckets."""
     return {
-        "Action": ["s3:ListObject", "s3:GetObject"],
+        "Action": ["s3:ListBucket", "s3:GetObject"],
         "Effect": "Allow",
         "Resource": ["arn:aws:s3:::*", "arn:aws:s3:::*/*"],
     }
@@ -196,12 +190,12 @@ def create_elb_put_s3_bucket_statement(
     }
 
 
-def create_read_secret_statement(secret_arn: str) -> IAMStatement:
+def create_read_secret_statement(secret_arns: list[str]) -> IAMStatement:
     """Allows a secret value to be read."""
     return {
         "Action": "secretsmanager:GetSecretValue",
         "Effect": "Allow",
-        "Resource": secret_arn,
+        "Resource": secret_arns,
     }
 
 

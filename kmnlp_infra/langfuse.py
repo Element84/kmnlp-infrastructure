@@ -35,6 +35,7 @@ from cdktf_cdktf_provider_aws.security_group import (
 from constructs import Construct
 
 from kmnlp_infra.components.clickhouse import ClickHouse
+from kmnlp_infra.components.log_group import create_task_log_group
 from kmnlp_infra.components.postgres_db import PostgresDB
 from kmnlp_infra.components.redis import Redis
 from kmnlp_infra.config import Config
@@ -118,10 +119,25 @@ class _LangfuseDependencies(Construct):
             network,
             name="langfuse",
             db_url_secret=self.db_url_secret_version,
+            instance_class=config.database.instance_class,
         )
-        self.redis = Redis(self, "redis", network, name="langfuse", eviction_policy="noeviction")
+        self.redis = Redis(
+            self,
+            "redis",
+            network,
+            name="langfuse",
+            node_type=config.langfuse.redis_node_type,
+            eviction_policy="noeviction",
+        )
         self.clickhouse = ClickHouse(
-            self, "clickhouse", config, network, ecs_cluster, name="langfuse"
+            self,
+            "clickhouse",
+            config,
+            network,
+            ecs_cluster,
+            name="langfuse",
+            num_cpus=config.langfuse.clickhouse.num_cpus,
+            memory_gb=config.langfuse.clickhouse.memory_gb,
         )
         # Create S3 bucket for media and event storage
         self.s3_bucket = S3Bucket(self, "langfuse_bucket", bucket="kmnlp-langfuse-storage")
@@ -407,10 +423,14 @@ class Langfuse(Construct):
             name="ReadSecrets",
             role=self.execution_role.id,
             policy=create_policy(
-                create_read_secret_statement(self.langfuse_secret.arn),
-                create_read_secret_statement(self.dependencies.db_url_secret.arn),
-                create_read_secret_statement(self.dependencies.clickhouse.secret_arn),
-                create_read_secret_statement(self.dependencies.redis.auth_token_secret.arn),
+                create_read_secret_statement(
+                    [
+                        self.langfuse_secret.arn,
+                        self.dependencies.db_url_secret.arn,
+                        self.dependencies.clickhouse.secret_arn,
+                        self.dependencies.redis.auth_token_secret.arn,
+                    ]
+                ),
             ),
         )
 
@@ -502,6 +522,8 @@ class Langfuse(Construct):
         web_env_vars = self._get_common_environment_variables(config)
         web_env_vars["NEXTAUTH_URL"] = f"https://{config.langfuse.web.domain}"
 
+        create_task_log_group(self, "web_log_group", name="langfuse-web")
+
         # Create task definition
         web_task_definition = EcsTaskDefinition(
             self,
@@ -545,7 +567,7 @@ class Langfuse(Construct):
             name="langfuse-web",
             cluster=ecs_cluster.id,
             task_definition=web_task_definition.arn,
-            desired_count=1,
+            desired_count=config.langfuse.web.num_instances,
             launch_type="FARGATE",
             platform_version="LATEST",
             network_configuration=EcsServiceNetworkConfiguration(
@@ -571,6 +593,8 @@ class Langfuse(Construct):
         """Create ECS service for Langfuse background worker."""
         # Environment variables for worker service
         worker_env_vars = self._get_common_environment_variables(config)
+
+        create_task_log_group(self, "worker_log_group", name="langfuse-worker")
 
         # Create task definition
         worker_task_definition = EcsTaskDefinition(
@@ -616,7 +640,7 @@ class Langfuse(Construct):
             name="langfuse-worker",
             cluster=ecs_cluster.id,
             task_definition=worker_task_definition.arn,
-            desired_count=1,
+            desired_count=config.langfuse.worker.num_instances,
             launch_type="FARGATE",
             platform_version="LATEST",
             network_configuration=EcsServiceNetworkConfiguration(

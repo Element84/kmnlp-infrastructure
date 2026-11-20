@@ -32,6 +32,7 @@ from cdktf_cdktf_provider_aws.service_discovery_service import (
 from cdktf_cdktf_provider_random.password import Password
 from constructs import Construct
 
+from kmnlp_infra.components.log_group import create_task_log_group
 from kmnlp_infra.components.secret import Secret
 from kmnlp_infra.config import Config
 from kmnlp_infra.network import Network
@@ -39,8 +40,6 @@ from kmnlp_infra.utils.policies import create_assume_role_policy_for_aws_service
 
 _CLICKHOUSE_PORT = 8123
 _CLICKHOUSE_NATIVE_PORT = 9000
-_NUM_CPUS = 2
-_MEMORY_GB = 16
 
 
 class ClickHouse(Construct):
@@ -77,6 +76,8 @@ class ClickHouse(Construct):
         ecs_cluster: EcsCluster,
         *,
         name: str,
+        num_cpus: int,
+        memory_gb: int,
     ) -> None:
         super().__init__(scope, id)
         self.db_name = name
@@ -259,7 +260,7 @@ class ClickHouse(Construct):
             "name": f"{name}-clickhouse",
             "image": "clickhouse/clickhouse-server:latest",
             "cpu": 0,
-            "memory": _MEMORY_GB * 1024,
+            "memory": memory_gb * 1024,
             "essential": True,
             "portMappings": [
                 {
@@ -326,14 +327,16 @@ class ClickHouse(Construct):
             ],
         }
 
+        create_task_log_group(self, "log_group", name=f"{name}-clickhouse")
+
         # Task definition
         self.task_definition = EcsTaskDefinition(
             self,
             "task_definition",
             depends_on=[self.password_secret.secret_version],
             family=f"{name}-clickhouse-task",
-            cpu=str(1024 * _NUM_CPUS),
-            memory=str(1024 * _MEMORY_GB),
+            cpu=str(1024 * num_cpus),
+            memory=str(1024 * memory_gb),
             network_mode="awsvpc",
             requires_compatibilities=["FARGATE"],
             execution_role_arn=self.task_execution_role.arn,

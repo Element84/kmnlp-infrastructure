@@ -173,3 +173,6 @@ evals/outputs/
 cdktf.out/
 
 temp/
+node_modules/
+package.json
+package-lock.json

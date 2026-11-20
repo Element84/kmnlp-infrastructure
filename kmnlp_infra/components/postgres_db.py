@@ -34,6 +34,7 @@ class PostgresDB(Construct):
         *,
         name: str,
         db_url_secret: DataAwsSecretsmanagerSecretVersion,
+        instance_class: str,
     ) -> None:
         super().__init__(scope, id)
 
@@ -118,7 +119,7 @@ class PostgresDB(Construct):
             apply_immediately=True,
             identifier=f"{name}-db",
             cluster_identifier=self.database.id,
-            instance_class="db.t3.medium",
+            instance_class=instance_class,
             engine=self.database.engine,
             engine_version=self.database.engine_version,
         )

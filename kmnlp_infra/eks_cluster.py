@@ -1,11 +1,13 @@
 import json
 
-from cdktf import Fn
+from cdktf import Fn, LocalExecProvisioner
+from cdktf_cdktf_provider_aws.data_aws_eks_addon_version import DataAwsEksAddonVersion
 from cdktf_cdktf_provider_aws.eks_access_entry import EksAccessEntry
 from cdktf_cdktf_provider_aws.eks_access_policy_association import (
     EksAccessPolicyAssociation,
     EksAccessPolicyAssociationAccessScope,
 )
+from cdktf_cdktf_provider_aws.eks_addon import EksAddon
 from cdktf_cdktf_provider_aws.eks_cluster import (
     EksCluster as CDKTFEksCluster,
 )
@@ -33,6 +35,7 @@ from cdktf_cdktf_provider_helm.provider import (
     HelmProviderKubernetesExec,
 )
 from cdktf_cdktf_provider_helm.release import Release
+from cdktf_cdktf_provider_null.resource import Resource
 from constructs import Construct
 
 from kmnlp_infra.config import Config
@@ -48,6 +51,17 @@ from kmnlp_infra.utils.policies import (
     managed_policy_arn_for_name,
 )
 
+# EKS upgrades one minor at a time, so reaching a new target takes one apply per hop.
+# Versions past standard support bill an extra $0.50/hr.
+#
+# WARNING: do not go past 1.37 without first confirming AWS has migrated EKS Fargate to
+# cgroup v2 -- see the Fargate profile below. After each hop, recycle the Fargate pods
+# (`kubectl delete pods --all -n default`); they never pick up a new kubelet in place.
+_KUBERNETES_VERSION = "1.36"
+
+# From v3.0.0 the chart version tracks the controller version (v2.x used chart 1.x).
+_AWS_LB_CONTROLLER_VERSION = "3.5.0"
+
 
 class EksCluster(Construct):
     """Create the Demo Kubernetes Cluster."""
@@ -61,6 +75,7 @@ class EksCluster(Construct):
     security_group: SecurityGroup
     cluster: CDKTFEksCluster
     fargate_profile: EksFargateProfile
+    addons: list[EksAddon]
 
     def __init__(
         self,
@@ -148,6 +163,7 @@ class EksCluster(Construct):
             self,
             "eks-cluster",
             name=EKS_CLUSTER_NAME,
+            version=_KUBERNETES_VERSION,
             role_arn=self.cluster_role.arn,
             vpc_config=EksClusterVpcConfig(
                 subnet_ids=network.private_subnet_ids,
@@ -236,13 +252,40 @@ class EksCluster(Construct):
             cluster_name=self.cluster.name,
             node_group_name="system",
             node_role_arn=self.node_role.arn,
+            version=_KUBERNETES_VERSION,
             subnet_ids=network.private_subnet_ids,
-            instance_types=["t3.medium"],
+            instance_types=config.eks_node_group.instance_types,
             capacity_type="ON_DEMAND",
-            scaling_config=EksNodeGroupScalingConfig(desired_size=2, min_size=1, max_size=4),
-            disk_size=20,
+            scaling_config=EksNodeGroupScalingConfig(
+                desired_size=config.eks_node_group.desired_size,
+                min_size=config.eks_node_group.min_size,
+                max_size=config.eks_node_group.max_size,
+            ),
+            disk_size=config.eks_node_group.disk_size_gb,
             ami_type="BOTTLEROCKET_x86_64",
         )
+
+        # Adopt the add-ons EKS installs by default so their versions track cluster upgrades.
+        # The version data source is keyed to _KUBERNETES_VERSION, so bumping the cluster also
+        # re-resolves each add-on to the default build for that version.
+        self.addons = [
+            EksAddon(
+                self,
+                f"addon-{addon_name}",
+                cluster_name=self.cluster.name,
+                addon_name=addon_name,
+                addon_version=DataAwsEksAddonVersion(
+                    self,
+                    f"addon-version-{addon_name}",
+                    addon_name=addon_name,
+                    kubernetes_version=_KUBERNETES_VERSION,
+                ).version,
+                resolve_conflicts_on_create="OVERWRITE",
+                resolve_conflicts_on_update="OVERWRITE",
+                depends_on=[self.node_group],
+            )
+            for addon_name in ("vpc-cni", "kube-proxy", "coredns")
+        ]
 
         # Create an execution role for the Fargate containers.
         self.pod_execution_role = IamRole(
@@ -267,6 +310,13 @@ class EksCluster(Construct):
         )
 
         # Create Fargate profile. Dask workers and schedulers will be scheduled here.
+        #
+        # WARNING: Fargate nodes still run cgroup v1 and log a CgroupV1 warning event on every
+        # launch. Kubernetes 1.35 made the kubelet refuse to start on cgroup v1 by default; AWS
+        # keeps Fargate working via the FailCgroupV1=false override. KEP-5573 removes the cgroup
+        # v1 code entirely no earlier than 1.38, at which point that override disappears and every
+        # pod matched by this profile stops starting unless AWS has moved Fargate to cgroup v2.
+        # Re-check before upgrading past 1.37. Bottlerocket node groups are already cgroup v2.
         self.fargate_profile = EksFargateProfile(
             self,
             "dask-fargate-profile",
@@ -342,6 +392,27 @@ class EksCluster(Construct):
             policy_arn="arn:aws:iam::aws:policy/ElasticLoadBalancingFullAccess",
         )
 
+        # Helm never upgrades CRDs on an existing release, so v3 requires applying them directly.
+        self.aws_lb_controller_crds = Resource(
+            self,
+            "aws_load_balancer_controller_crds",
+            triggers={"chart_version": _AWS_LB_CONTROLLER_VERSION},
+            provisioners=[
+                LocalExecProvisioner(
+                    type="local-exec",
+                    command=f"""
+                        aws eks update-kubeconfig \
+                            --region {config.aws_account.region} \
+                            --name {EKS_CLUSTER_NAME} && \
+                        kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/\
+aws-load-balancer-controller/v{_AWS_LB_CONTROLLER_VERSION}/helm/aws-load-balancer-controller/\
+crds/crds.yaml
+                    """,
+                )
+            ],
+            depends_on=[self.cluster],
+        )
+
         # Add AWS Load Balancer Controller
         self.aws_lb_controller = Release(
             self,
@@ -350,7 +421,7 @@ class EksCluster(Construct):
             repository="https://aws.github.io/eks-charts",
             chart="aws-load-balancer-controller",
             namespace="kube-system",
-            version="1.13.4",
+            version=_AWS_LB_CONTROLLER_VERSION,
             values=[
                 json.dumps(
                     {
@@ -369,6 +440,7 @@ class EksCluster(Construct):
             ],
             replace=True,
             wait=True,
+            depends_on=[self.aws_lb_controller_crds],
         )
 
         # Add DaskCluster Operator to the EKSCluster
@@ -381,7 +453,7 @@ class EksCluster(Construct):
             create_namespace=True,
             namespace="dask-operator",
             name="dask-kubernetes-operator-prod",
-            version="2025.7.0",  # API seems to change. Worth pinning.
+            version="2026.3.0",  # API seems to change. Worth pinning. Declares kubeVersion >=1.30.
             replace=True,
             wait=True,
         )

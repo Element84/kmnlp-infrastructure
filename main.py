@@ -18,16 +18,15 @@ from constructs import Construct
 
 from kmnlp_infra.api_service import Api
 from kmnlp_infra.bootstrap import DeployRole
-from kmnlp_infra.chainlit_ecs_service import (
-    Alb,
-    ChainlitEcsService,
-)
+from kmnlp_infra.components.ecr import ImageRepositoryLifecycle
 from kmnlp_infra.config import Config
 from kmnlp_infra.dask_cluster import DaskCluster
 from kmnlp_infra.eks_cluster import EksCluster
 from kmnlp_infra.frontend import Frontend
+from kmnlp_infra.knowledge_graph_ubl import KnowledgeGraphUBL
 from kmnlp_infra.langfuse import Langfuse
 from kmnlp_infra.network import Network
+from kmnlp_infra.oiss_ingest_ubl import OISSIngestUBL
 from kmnlp_infra.opensearch import Opensearch
 from kmnlp_infra.utils.common import EKS_CLUSTER_NAME, SCHEDULER_TCP_COMM_PORT, get_env_var
 
@@ -87,6 +86,7 @@ class DemoKmnlpEksClusterStack(TerraformStack):
             "aws",
             region=config.aws_account.region,
         )
+        NullProvider(self, "null-provider")
 
         self.bootstrap_state = DataTerraformRemoteStateS3(
             self,
@@ -151,19 +151,17 @@ class DaskClusterStack(TerraformStack):
 
 
 class DemoKmnlpInfraStack(TerraformStack):
-    """Create Demo stack to run Chainlit service for the KMNLP project.
-
-    The service runs in the Elastic Container Service running as Fargate tasks.
-    """
+    """Create Demo stack to run Chainlit service for the KMNLP project."""
 
     network: Network
     opensearch: Opensearch
     langfuse: Langfuse
-    chainlit_demo_alb: Alb
-    chainlit_demo_ecs_service: ChainlitEcsService
     ecs_cluster: EcsCluster
     api: Api
     frontend: Frontend
+    oiss_ingest_ubl: OISSIngestUBL
+    image_repository_lifecycle: ImageRepositoryLifecycle
+    knowledge_graph_ubl: KnowledgeGraphUBL
 
     def __init__(self, scope: Construct, id: str, config: Config) -> None:
         super().__init__(scope, id)
@@ -179,7 +177,29 @@ class DemoKmnlpInfraStack(TerraformStack):
         self.network = Network(self, "kmnlp-network", config)
         self.opensearch = Opensearch(self, "opensearch", config, self.network)
 
-        self.ecs_cluster = EcsCluster(self, "ecs-cluster", name="kmnlp-ecs-cluster")
+        # These repositories are created by the application repositories' CI, so only their
+        # retention policies are managed here. kmnlp/dask is pushed to by CI but is not
+        # referenced by any construct, so it is named explicitly.
+        self.image_repository_lifecycle = ImageRepositoryLifecycle(
+            self,
+            "image-repository-lifecycle",
+            repository_names=[
+                config.api.image.repository_name,
+                config.langfuse.web.image.repository_name,
+                config.langfuse.worker.image.repository_name,
+                "kmnlp/dask",
+            ],
+        )
+
+        self.ecs_cluster = EcsCluster(
+            self,
+            "ecs-cluster",
+            name="kmnlp-ecs-cluster",
+            # "enabled" is standard Container Insights; "enhanced" adds per-container
+            # metrics dimensioned by task ID, so every task launch creates new billable
+            # metric series. Valid values are enhanced, enabled and disabled.
+            setting=[{"name": "containerInsights", "value": "enabled"}],
+        )
         self.langfuse = Langfuse(self, "langfuse", config, self.network, self.ecs_cluster)
 
         cluster = DataAwsEksCluster(self, id_="eks-cluster-data", name=EKS_CLUSTER_NAME)
@@ -208,30 +228,10 @@ class DemoKmnlpInfraStack(TerraformStack):
             dask_scheduler_service.status.get(0).load_balancer.get(0).ingress.get(0).hostname
         )
 
-        # FUTURE refactor the chainlit stuff to be contained in a construct like the API is.
-        self.chainlit_demo_alb = Alb(
-            self,
-            "alb",
-            config,
-            network=self.network,
-            name="demo-kmnlp-chainlit-alb",
-            domain=config.chainlit.domain,
-        )
-
         dask_scheduler_address = (
             f"tcp://{dask_scheduler_service_hostname}:{SCHEDULER_TCP_COMM_PORT}"
         )
 
-        self.chainlit_demo_ecs_service = ChainlitEcsService(
-            self,
-            "ecs_service",
-            config,
-            network=self.network,
-            ecs_cluster=self.ecs_cluster,
-            alb=self.chainlit_demo_alb,
-            opensearch=self.opensearch,
-            dask_scheduler_address=dask_scheduler_address,
-        )
         self.api = Api(
             self,
             "api",
@@ -242,6 +242,38 @@ class DemoKmnlpInfraStack(TerraformStack):
             dask_scheduler_address=dask_scheduler_address,
         )
         self.frontend = Frontend(self, "frontend", config)
+
+        self.oiss_ingest_ubl = OISSIngestUBL(
+            self,
+            "oiss-ingest-ubl",
+            config,
+            self.network,
+            ecs_cluster=self.ecs_cluster,
+        )
+        TerraformOutput(
+            self,
+            "oiss_ingest_ubl_state_machine_arn",
+            value=self.oiss_ingest_ubl.state_machine.arn,
+            description=(
+                "State machine ARN to use as the Resource Identifier in the OISS process template"
+            ),
+        )
+
+        self.knowledge_graph_ubl = KnowledgeGraphUBL(
+            self,
+            "knowledge-graph-ubl",
+            config,
+            self.network,
+            ecs_cluster=self.ecs_cluster,
+        )
+        TerraformOutput(
+            self,
+            "knowledge_graph_ubl_state_machine_arn",
+            value=self.knowledge_graph_ubl.state_machine.arn,
+            description=(
+                "State machine ARN for KMNLP Knowledge Graph UBL (use in OISS process template)"
+            ),
+        )
 
 
 config = Config.from_config_file(Path(_CONFIG_FIlE))

@@ -2,48 +2,6 @@
 
 Defines the infrastructure for the KM NLP Project.
 
-
-## Dask Cluster Planning Temporary Notes
-
-Based on https://gist.github.com/jacobtomlinson/ee5ba79228e42bcc9975faf0179c3d1a
-
-Input
-* cluster arn
-
-INfrastructure
-
-* IAM roles
-  * dask-fargate-execution
-  * dask-fargate-task
-* Security Groups
-  * dask
-    * Allow 8786 - 8787 from things that are communicating wiht dask
-    * Ephemeral port access from itself?
-* Cloud watch log group
-* ECS Tasks
-  * dask-scheduler
-  * dask-worker
-
-
-Based on dask cloud provider source
-
-1. Create cluster in ECS
-2. Create execution role - 1061
-   1. ecs-tasks asume role and attached policies
-3. Create task role
-4. Create cloud watch logs group
-5. Create security group
-   1. 8786 and 8787 for external
-   2. 0 - 65535 from the group itself
-6. Creates the scheduler task def
-7. Create the worker task def
-
-Scaling up
-1. Scheduler task is started
-   1. An ecs task is run
-2. TODO continue here. It should just be starting the workers
-
-
 ## Developer Setup
 
 1. Install cdktf and terraform
@@ -96,6 +54,35 @@ Create the EKS Cluster where Kubernetes work (i.e. the Dask Cluster) will be sch
 * Dask Operator to manage creating all resources needed for Dask Cluster and Dask Autoscaler
 * Node pool to schedule system tasks
 * Fargate profile to schedule Dask workers and scheduler
+* Managed add-ons (`vpc-cni`, `kube-proxy`, `coredns`), version-tracked to the cluster version
+
+#### Upgrading Kubernetes
+
+The cluster version is pinned by `_KUBERNETES_VERSION` in `kmnlp_infra/eks_cluster.py` and
+applies to both the control plane and the node group. Running a version past its standard
+support window adds an **extra $0.50/hr** (~$372/mo) in EKS extended support charges, so
+don't let it drift.
+
+EKS upgrades **one minor version at a time**, so each hop is a separate apply: bump the
+constant, `scripts/deploy.sh eks_cluster`, then recycle the Fargate pods with
+`kubectl delete pods --all -n default`. Fargate pods never pick up a new kubelet in place,
+so without that step they stay on the old version indefinitely. Expect ~15 minutes for the
+node group rolling replacement on each hop.
+
+> [!WARNING]
+> **Do not upgrade past Kubernetes 1.37 without first checking that AWS has migrated EKS
+> Fargate to cgroup v2.**
+>
+> Every Dask worker and the scheduler run on the Fargate profile, and Fargate nodes still
+> use cgroup v1 — they log a `CgroupV1` warning event on each launch. Kubernetes 1.35 made
+> the kubelet refuse to start on cgroup v1 by default, and AWS currently keeps Fargate
+> working through the `FailCgroupV1=false` override. [KEP-5573](https://git.k8s.io/enhancements/keps/sig-node/5573-remove-cgroup-v1)
+> removes the cgroup v1 code entirely "no earlier than 1.38", which also removes that
+> override. If AWS has not moved Fargate to cgroup v2 by then, **no pod matched by the
+> Fargate profile will start** on that version.
+>
+> Bottlerocket node groups are already cgroup v2, so moving the Dask workers off Fargate is
+> the durable fix.
 
 ### `dask_cluster`
 

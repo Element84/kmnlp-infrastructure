@@ -1,6 +1,6 @@
 from pathlib import Path
 from textwrap import dedent
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -73,6 +73,53 @@ class EcsPublicServiceConfig(EcsServiceConfig, frozen=True):
     domain: str
 
 
+class IngestUBLConfig(BaseModel, frozen=True):
+    """Configuration for the OISS ingest UBL (ECS task + Step Functions state machine)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    image: ImageRef
+    num_cpus: int
+    memory_gb: int
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None
+
+    @property
+    def memory_mb(self) -> int:
+        """Returns the amount of configured memory in megabytes."""
+        return self.memory_gb * 1024
+
+
+class KnowledgeGraphUBLConfig(BaseModel, frozen=True):
+    """Configuration for the Knowledge Graph UBL (ECS task + Step Functions state machine)."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    num_cpus: int
+    memory_gb: int
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = "INFO"
+    output_bucket: str
+    output_prefix: str
+
+    @property
+    def memory_mb(self) -> int:
+        """Returns the amount of configured memory in megabytes."""
+        return self.memory_gb * 1024
+
+
+class ResourceConfig(BaseModel, frozen=True):
+    """Generic CPU/memory sizing for a container that doesn't need an image or domain."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    num_cpus: int
+    memory_gb: int
+
+    @property
+    def memory_mb(self) -> int:
+        """Returns the amount of configured memory in megabytes."""
+        return self.memory_gb * 1024
+
+
 class Langfuse(BaseModel, frozen=True):
     """Configures the frontend for deployment."""
 
@@ -80,6 +127,16 @@ class Langfuse(BaseModel, frozen=True):
 
     web: EcsPublicServiceConfig
     worker: EcsServiceConfig
+    clickhouse: ResourceConfig
+    redis_node_type: str
+
+
+class LiteLLM(BaseModel, frozen=True):
+    """Config needed for LiteLLM."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    proxy_url: str
 
 
 class TerraformConfig(BaseModel, frozen=True):
@@ -132,6 +189,17 @@ class Frontend(BaseModel, frozen=True):
     artifact: S3ArtifactRef
 
 
+class DaskPodResources(BaseModel, frozen=True):
+    """CPU/memory requests and limits for a Dask pod container."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    cpu_request: int
+    cpu_limit: int
+    memory_request_gb: int
+    memory_limit_gb: int
+
+
 class DaskClusterConfig(BaseModel, frozen=True):
     """Configuration for the Dask cluster."""
 
@@ -139,6 +207,59 @@ class DaskClusterConfig(BaseModel, frozen=True):
 
     min_workers: int
     max_workers: int
+    worker: DaskPodResources
+    scheduler: DaskPodResources
+
+
+class OpensearchConfig(BaseModel, frozen=True):
+    """Configuration for the Opensearch domain."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    instance_type: str
+    num_instances: int
+    engine_version: str
+    volume_size_gb: int
+    iops: int
+    throughput: int
+
+
+class EksNodeGroupConfig(BaseModel, frozen=True):
+    """Configuration for the EKS system node group."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    instance_types: list[str]
+    desired_size: int
+    min_size: int
+    max_size: int
+    disk_size_gb: int
+
+
+class DatabaseConfig(BaseModel, frozen=True):
+    """Configuration shared by the Aurora Postgres instances."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    instance_class: str
+
+
+class ApiEnvVars(BaseModel, frozen=True):
+    """Application-specific environment variables for the API service."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    dask_compute_size_limit_gb: int
+    dask_progress_poll_interval_sec: int
+    orchestration_agent_max_consecutive_responses: int
+    orchestration_agent_max_tokens: int
+    algorithm_agent_max_tokens: int
+
+
+class ApiConfig(EcsPublicServiceConfig, frozen=True):
+    """Configuration for the API ECS service."""
+
+    env_vars: ApiEnvVars
 
 
 class Config(BaseModel, frozen=True):
@@ -155,12 +276,17 @@ class Config(BaseModel, frozen=True):
         description="Bucket containing build artifacts from other projects"
     )
     data_bucket: str
-    test_geotiff_bucket: str
+    user_data_bucket: str
     langfuse: Langfuse
-    chainlit: EcsPublicServiceConfig
-    api: EcsPublicServiceConfig
+    lite_llm: LiteLLM
+    api: ApiConfig
     frontend: Frontend
     dask_cluster: DaskClusterConfig
+    ingest_ubl: IngestUBLConfig
+    opensearch: OpensearchConfig
+    eks_node_group: EksNodeGroupConfig
+    database: DatabaseConfig
+    knowledge_graph_ubl: KnowledgeGraphUBLConfig
 
     @staticmethod
     def from_config_file(config_file: Path) -> "Config":

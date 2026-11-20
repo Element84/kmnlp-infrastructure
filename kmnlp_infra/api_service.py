@@ -15,6 +15,11 @@ from cdktf_cdktf_provider_aws.iam_role_policy import IamRolePolicy
 from cdktf_cdktf_provider_aws.iam_role_policy_attachment import IamRolePolicyAttachment
 from cdktf_cdktf_provider_aws.rds_cluster import RdsCluster
 from cdktf_cdktf_provider_aws.rds_cluster_instance import RdsClusterInstance
+from cdktf_cdktf_provider_aws.s3_bucket import S3Bucket
+from cdktf_cdktf_provider_aws.s3_bucket_cors_configuration import (
+    S3BucketCorsConfiguration,
+    S3BucketCorsConfigurationCorsRule,
+)
 from cdktf_cdktf_provider_aws.security_group import (
     SecurityGroup,
     SecurityGroupEgress,
@@ -22,6 +27,7 @@ from cdktf_cdktf_provider_aws.security_group import (
 )
 from constructs import Construct
 
+from kmnlp_infra.components.log_group import create_task_log_group
 from kmnlp_infra.components.public_alb import PublicAlb
 from kmnlp_infra.config import Config
 from kmnlp_infra.network import Network
@@ -32,7 +38,6 @@ from kmnlp_infra.utils.policies import (
     create_policy,
     create_put_s3_bucket_statement,
     create_read_all_buckets_statement,
-    create_read_s3_bucket_statement,
     create_read_secret_statement,
 )
 
@@ -40,18 +45,90 @@ _API_PORT = 8000
 _DB_PORT = 5432
 
 
+class _PostgresDB(Construct):
+    """Postgres DB for API service."""
+
+    sg: SecurityGroup
+    db_subnet_group: DbSubnetGroup
+    api_db_cluster: RdsCluster
+    api_db_instance: RdsClusterInstance
+
+    def __init__(self, scope: Construct, id: str, network: Network, *, instance_class: str) -> None:
+        super().__init__(scope, id)
+
+        name = "api"
+
+        # Security group for RDS
+        self.sg = SecurityGroup(
+            self,
+            "sg",
+            name=f"{name}-db",
+            description=f"Security group for the {name} database",
+            vpc_id=network.vpc.id,
+            ingress=[
+                SecurityGroupIngress(
+                    from_port=_DB_PORT,
+                    to_port=_DB_PORT,
+                    protocol="tcp",
+                    cidr_blocks=[network.vpc.cidr_block],
+                )
+            ],
+            egress=[
+                SecurityGroupEgress(
+                    from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"]
+                )
+            ],
+            tags={"Name": f"{name}-db"},
+        )
+
+        # DB subnet group
+        self.db_subnet_group = DbSubnetGroup(
+            self,
+            "db_subnet_group",
+            name=f"{name}-db",
+            subnet_ids=network.private_subnet_ids,
+            tags={"Name": f"{name}-db"},
+        )
+
+        self.api_db_cluster = RdsCluster(
+            scope,
+            "kmnlp_api_db_cluster",
+            engine="aurora-postgresql",
+            cluster_identifier=f"{name}-db",
+            database_name=name,
+            db_subnet_group_name=self.db_subnet_group.name,
+            vpc_security_group_ids=[self.sg.id],
+            manage_master_user_password=True,
+            master_username="kmnlp_api_prod",
+            skip_final_snapshot=True,
+            tags={"Name": f"{name}-db"},
+        )
+
+        self.api_db_instance = RdsClusterInstance(
+            self,
+            "db_instance",
+            apply_immediately=True,
+            identifier="kmnlp-api-db",
+            cluster_identifier=self.api_db_cluster.id,
+            instance_class=instance_class,
+            engine=self.api_db_cluster.engine,
+            engine_version=self.api_db_cluster.engine_version,
+        )
+
+
 class _ApiEcsService(Construct):
     """Create the API ECS Service, running using Fargate."""
 
     langfuse_api_key_secret: DataAwsSecretsmanagerSecret
+    lite_llm_api_key_secret: DataAwsSecretsmanagerSecret
     image: DataAwsEcrImage
     task_execution_role: IamRole
     task_execution_role_policy: IamRolePolicy
     task_execution_role_managed_policy_attachment: IamRolePolicyAttachment
     task_role: IamRole
     task_role_bedrock_policy: IamRolePolicy
-    task_role_s3_data_policy: IamRolePolicy
-    task_role_s3_all_policy: IamRolePolicy
+    task_role_s3_read_all_buckets_policy: IamRolePolicy
+    task_role_s3_put_user_data_bucket_policy: IamRolePolicy
     task_def: EcsTaskDefinition
     security_group: SecurityGroup
     ecs_service: EcsService
@@ -67,6 +144,7 @@ class _ApiEcsService(Construct):
         opensearch: Opensearch,
         dask_scheduler_address: str,
         lb_target_group_arn: str,
+        api_db: _PostgresDB,
     ) -> None:
         super().__init__(scope, id)
 
@@ -74,6 +152,10 @@ class _ApiEcsService(Construct):
 
         self.langfuse_api_key_secret = DataAwsSecretsmanagerSecret(
             self, "langfuse_api_key_secret", name="langfuse_api_keys"
+        )
+
+        self.lite_llm_api_key_secret = DataAwsSecretsmanagerSecret(
+            self, "lite_llm_api_key_secret", name="litellm_api_key"
         )
 
         self.image = DataAwsEcrImage(
@@ -110,13 +192,20 @@ class _ApiEcsService(Construct):
             ),
             role=self.task_execution_role.name,
         )
+
         self.read_secrets_policy = IamRolePolicy(
             self,
-            "read_secrets_policy",
-            name="ReadSecrets",
+            "read_langfuse_secrets_policy",
+            name="ReadSecretsLangfuse",
             role=self.task_execution_role.id,
             policy=create_policy(
-                create_read_secret_statement(self.langfuse_api_key_secret.arn),
+                create_read_secret_statement(
+                    [
+                        self.langfuse_api_key_secret.arn,
+                        self.lite_llm_api_key_secret.arn,
+                        api_db.api_db_cluster.master_user_secret.get(0).secret_arn,
+                    ]
+                ),
             ),
         )
 
@@ -135,28 +224,21 @@ class _ApiEcsService(Construct):
             role=self.task_role.name,
         )
 
-        self.task_role_s3_data_policy = IamRolePolicy(
+        self.task_role_s3_read_all_buckets_policy = IamRolePolicy(
             self,
-            "task-role-s3-data-policy",
-            name="ReadS3DataBucket",
-            policy=create_policy(create_read_s3_bucket_statement(config.data_bucket)),
-            role=self.task_role.name,
-        )
-
-        # API doesn't need to read these GeoTIFFs. Only create them.
-        self.task_role_s3_put_test_geotiff_bucket_policy = IamRolePolicy(
-            self,
-            "task-role-s3-put-geotiff-policy",
-            name="PutS3GeotiffBucket",
-            policy=create_policy(create_put_s3_bucket_statement(config.test_geotiff_bucket)),
-            role=self.task_role.name,
-        )
-
-        self.task_role_s3_all_policy = IamRolePolicy(
-            self,
-            "task-role-s3-all-policy",
+            "task-role-s3-read-all-buckets-policy",
             name="ReadAllS3Buckets",
             policy=create_policy(create_read_all_buckets_statement()),
+            role=self.task_role.name,
+        )
+
+        self.task_role_s3_put_user_data_bucket_policy = IamRolePolicy(
+            self,
+            "task-role-s3-put-user-data-bucket-policy",
+            name="PutS3UserDataBucket",
+            policy=create_policy(
+                create_put_s3_bucket_statement(config.user_data_bucket),
+            ),
             role=self.task_role.name,
         )
 
@@ -167,6 +249,22 @@ class _ApiEcsService(Construct):
             # To enable CORS from the frontend
             "FRONTEND_ENDPOINT": f"https://{config.frontend.domain}",
             "LANGFUSE_HOST": f"https://{config.langfuse.web.domain}",
+            "DB_ENDPOINT": api_db.api_db_cluster.endpoint,
+            "DB_PORT": "5432",  # Standard Postgres port. Feels silly to put it in config.
+            "DB_NAME": api_db.api_db_cluster.database_name,
+            "DB_USERNAME": api_db.api_db_cluster.master_username,
+            "LITE_LLM_PROXY_URL": config.lite_llm.proxy_url,
+            "DASK_COMPUTE_SIZE_LIMIT_GB": str(service_config.env_vars.dask_compute_size_limit_gb),
+            "DASK_PROGRESS_POLL_INTERVAL_SEC": str(
+                service_config.env_vars.dask_progress_poll_interval_sec
+            ),
+            "ORCHESTRATION_AGENT_MAX_CONSECUTIVE_RESPONSES": str(
+                service_config.env_vars.orchestration_agent_max_consecutive_responses
+            ),
+            "ORCHESTRATION_AGENT_MAX_TOKENS": str(
+                service_config.env_vars.orchestration_agent_max_tokens
+            ),
+            "ALGORITHM_AGENT_MAX_TOKENS": str(service_config.env_vars.algorithm_agent_max_tokens),
         }
 
         container_def = {
@@ -182,6 +280,16 @@ class _ApiEcsService(Construct):
                 {
                     "name": "LANGFUSE_PUBLIC_KEY",
                     "valueFrom": f"{self.langfuse_api_key_secret.arn}:PUBLIC_KEY::",
+                },
+                {
+                    "name": "AWS_BEARER_TOKEN_BEDROCK",
+                    "valueFrom": f"{self.lite_llm_api_key_secret.arn}:key::",
+                },
+                {
+                    "name": "DB_PASSWORD",
+                    "valueFrom": (
+                        f"{api_db.api_db_cluster.master_user_secret.get(0).secret_arn}:password::"
+                    ),
                 },
             ],
             "essential": True,
@@ -210,6 +318,8 @@ class _ApiEcsService(Construct):
                 },
             },
         }
+
+        create_task_log_group(self, "log_group", name="kmnlp-api")
 
         self.task_def = EcsTaskDefinition(
             self,
@@ -281,83 +391,14 @@ class _ApiEcsService(Construct):
         )
 
 
-class _PostgresDB(Construct):
-    """Postgres DB for API service."""
-
-    sg: SecurityGroup
-    db_subnet_group: DbSubnetGroup
-    api_db_cluster: RdsCluster
-    api_db_instance: RdsClusterInstance
-
-    def __init__(self, scope: Construct, id: str, network: Network) -> None:
-        super().__init__(scope, id)
-
-        name = "api"
-
-        # Security group for RDS
-        self.sg = SecurityGroup(
-            self,
-            "sg",
-            name=f"{name}-db",
-            description=f"Security group for the {name} database",
-            vpc_id=network.vpc.id,
-            ingress=[
-                SecurityGroupIngress(
-                    from_port=_DB_PORT,
-                    to_port=_DB_PORT,
-                    protocol="tcp",
-                    cidr_blocks=[network.vpc.cidr_block],
-                )
-            ],
-            egress=[
-                SecurityGroupEgress(
-                    from_port=0, to_port=0, protocol="-1", cidr_blocks=["0.0.0.0/0"]
-                )
-            ],
-            tags={"Name": f"{name}-db"},
-        )
-
-        # DB subnet group
-        self.db_subnet_group = DbSubnetGroup(
-            self,
-            "db_subnet_group",
-            name=f"{name}-db",
-            subnet_ids=network.private_subnet_ids,
-            tags={"Name": f"{name}-db"},
-        )
-
-        self.api_db_cluster = RdsCluster(
-            scope,
-            "kmnlp_api_db_cluster",
-            engine="aurora-postgresql",
-            cluster_identifier=f"{name}-db",
-            database_name=name,
-            db_subnet_group_name=self.db_subnet_group.name,
-            vpc_security_group_ids=[self.sg.id],
-            manage_master_user_password=True,
-            master_username="kmnlp_api_prod",
-            skip_final_snapshot=True,
-            tags={"Name": f"{name}-db"},
-        )
-
-        self.api_db_instance = RdsClusterInstance(
-            self,
-            "db_instance",
-            apply_immediately=True,
-            identifier="kmnlp-api-db",
-            cluster_identifier=self.api_db_cluster.id,
-            instance_class="db.t3.medium",
-            engine=self.api_db_cluster.engine,
-            engine_version=self.api_db_cluster.engine_version,
-        )
-
-
 class Api(Construct):
     """Defines a public API running as an ecs service."""
 
     api_db: _PostgresDB
     alb: PublicAlb
     ecs_service: _ApiEcsService
+    user_data_bucket: S3Bucket
+    user_data_bucket_cors: S3BucketCorsConfiguration
 
     def __init__(
         self,
@@ -377,6 +418,7 @@ class Api(Construct):
             scope,
             "kmnlp_api_db",
             network,
+            instance_class=config.database.instance_class,
         )
 
         # FUTURE change this to allow specifying a list of allowed ip addresses
@@ -400,4 +442,45 @@ class Api(Construct):
             opensearch=opensearch,
             dask_scheduler_address=dask_scheduler_address,
             lb_target_group_arn=self.alb.lb_target_group.arn,
+            api_db=self.api_db,
         )
+
+        # User Data bucket
+        self.user_data_bucket = S3Bucket(
+            self,
+            "user-data-bucket",
+            bucket=config.user_data_bucket,
+            force_destroy=False,
+            object_lock_enabled=False,
+        )
+        # Terraform's recommendation is to leave import blocks in place for
+        # documenation.
+        #
+        # CDKTF doesn't seem to have an official recommendation, but it seems
+        # like people remove them. Feel free to remove if it causes problems.
+        self.user_data_bucket.import_from(config.user_data_bucket)
+
+        # CORS configuration for data bucket.
+        self.user_data_bucket_cors = S3BucketCorsConfiguration(
+            self,
+            "user-data-bucket-cors",
+            bucket=self.user_data_bucket.id,
+            cors_rule=[
+                S3BucketCorsConfigurationCorsRule(
+                    allowed_headers=["*"],
+                    allowed_methods=["GET", "HEAD"],
+                    allowed_origins=[
+                        "http://localhost:5173",
+                        f"https://{config.frontend.domain}",
+                    ],
+                    expose_headers=[],
+                    max_age_seconds=3600,
+                )
+            ],
+        )
+        # Terraform's recommendation is to leave import blocks in place for
+        # documenation.
+        #
+        # CDKTF doesn't seem to have an official recommendation, but it seems
+        # like people remove them. Feel free to remove if it causes problems.
+        self.user_data_bucket_cors.import_from(config.user_data_bucket)

@@ -1,4 +1,12 @@
-from cdktf import Fn, LocalExecProvisioner
+from typing import cast
+
+from cdktf import (
+    DataResource,
+    Fn,
+    LocalExecProvisioner,
+    TerraformResourceLifecycle,
+    Token,
+)
 from cdktf_cdktf_provider_aws.data_aws_ecr_image import DataAwsEcrImage
 from cdktf_cdktf_provider_aws.iam_role import IamRole
 from cdktf_cdktf_provider_aws.iam_role_policy_attachment import IamRolePolicyAttachment
@@ -26,6 +34,7 @@ class DaskCluster(Construct):
     """Create the Demo Kubernetes Cluster."""
 
     api_image: DataAwsEcrImage
+    api_image_resource: DataResource
     default_pod_role: IamRole
     default_pod_role_policy_attachment: IamRolePolicyAttachment
     dask_service_account: ServiceAccount
@@ -51,6 +60,14 @@ class DaskCluster(Construct):
             "image",
             repository_name=config.api.image.repository_name,
             image_tag=config.api.image.tag,
+        )
+
+        # Create a `terraform_data` resource to track the API Image's URI in
+        # state. This allows us to watch changes to the API image.
+        # (Data blocks do not track values in Terraform state, which prevents
+        # them from being used in lifecycle blocks.)
+        self.api_image_resource = DataResource(
+            self, "api_image_url", input={"image_uri": self.api_image.image_uri}
         )
 
         # Create IAM Role for default Kubernetes Service Account
@@ -102,7 +119,8 @@ class DaskCluster(Construct):
                 "metadata": {"name": "kmnlp-compute", "namespace": "default"},
                 "spec": {
                     "worker": {
-                        "replicas": 8,
+                        # Only seeds the worker group; the DaskAutoscaler owns the count after that.
+                        "replicas": config.dask_cluster.min_workers,
                         "spec": {
                             "serviceAccountName": dask_service_account_name,
                             "containers": [
@@ -115,7 +133,7 @@ class DaskCluster(Construct):
                                         "--name",
                                         "$(DASK_WORKER_NAME)",
                                         "--resources",
-                                        "MEMORY=16e9",
+                                        f"MEMORY={config.dask_cluster.worker.memory_limit_gb}e9",
                                         "--dashboard",
                                         "--dashboard-address",
                                         "8788",
@@ -129,12 +147,16 @@ class DaskCluster(Construct):
                                     ],
                                     "resources": {
                                         "limits": {
-                                            "cpu": "8",
-                                            "memory": "16G",
+                                            "cpu": str(config.dask_cluster.worker.cpu_limit),
+                                            "memory": (
+                                                f"{config.dask_cluster.worker.memory_limit_gb}G"
+                                            ),
                                         },
                                         "requests": {
-                                            "cpu": "4",
-                                            "memory": "8G",
+                                            "cpu": str(config.dask_cluster.worker.cpu_request),
+                                            "memory": (
+                                                f"{config.dask_cluster.worker.memory_request_gb}G"
+                                            ),
                                         },
                                     },
                                 },
@@ -174,12 +196,16 @@ class DaskCluster(Construct):
                                     },
                                     "resources": {
                                         "limits": {
-                                            "cpu": "2",
-                                            "memory": "4G",
+                                            "cpu": str(config.dask_cluster.scheduler.cpu_limit),
+                                            "memory": (
+                                                f"{config.dask_cluster.scheduler.memory_limit_gb}G"
+                                            ),
                                         },
                                         "requests": {
-                                            "cpu": "1",
-                                            "memory": "2G",
+                                            "cpu": str(config.dask_cluster.scheduler.cpu_request),
+                                            "memory": (
+                                                f"{config.dask_cluster.scheduler.memory_request_gb}G"
+                                            ),
                                         },
                                     },
                                 }
@@ -209,6 +235,12 @@ class DaskCluster(Construct):
                     },
                 },
             },
+            lifecycle=TerraformResourceLifecycle(
+                # Need to go through token to generate a string that isn't a
+                # reference, which breaks:
+                # https://github.com/hashicorp/terraform-cdk/issues/3532
+                replace_triggered_by=[cast("str", Token.as_any(self.api_image_resource))],
+            ),
         )
 
         # DaskAutoscaler manifest
